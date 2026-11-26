@@ -17,9 +17,18 @@ services:
       OUTPUT_PATTERN: "{author}/{series}/{title}"
       UMASK: "002"
       TZ: "America/New_York"
+      NVIDIA_VISIBLE_DEVICES: all           # lets the UI show GPU load (nvidia-smi only; Kokoro does the work)
+      NVIDIA_DRIVER_CAPABILITIES: utility
       # ABS_URL: "http://ABS_SERVER_IP:13378"
       # ABS_API_KEY: ""
       # ABS_LIBRARY_ID: ""
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       - /mnt/POOL/apps/ebook2audio/data:/data               # <-- 2.
       - /mnt/POOL/apps/ebook2audio/config:/config

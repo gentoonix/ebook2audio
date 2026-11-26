@@ -40,6 +40,7 @@
 <main>
   <h1>ebook → audiobook</h1>
   <div id="status"></div>
+  <div id="gpu" style="color:var(--mut);font-size:13px;margin-top:4px"></div>
 
   <div class="card">
     <div id="drop">Drop ebooks here (EPUB, MOBI, AZW3, PDF, FB2, DOCX, TXT…), or tap to choose (multiple allowed)</div>
@@ -212,7 +213,15 @@ $('#editform').onsubmit = async e => {
   } catch (err) { alert(err.message); }
 };
 
+const dur = sec => { sec = Math.max(0, Math.round(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60;
+  return h ? `${h}h ${m}m` : m ? `${m}m ${s}s` : `${s}s`; };
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+function timing(j) {
+  if (j.status === 'running' && j.started) return ` · elapsed ${dur(j.now - j.started)}` + (j.eta ? ` · ~${dur(j.eta)} left` : '');
+  if (j.status === 'done' && j.started && j.finished && j.finished > j.started) return ` · took ${dur(j.finished - j.started)}`;
+  return '';
+}
 
 async function refresh() {
   try {
@@ -228,7 +237,7 @@ async function refresh() {
         <div class="top"><span class="name">${esc(title)}</span><span class="badge">${j.status}${j.status === 'running' ? ' ' + pct + '%' : ''}</span></div>
         <div class="sub">${esc(j.author)}${j.author ? ' · ' : ''}${esc(series)}${esc(j.voice)}${j.status === 'done' ? ' · ' + esc(j.output) : ''}</div>
         ${j.status === 'running' ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
-        <div class="sub ${j.status === 'failed' ? 'err' : ''}">${esc(j.message)}</div>
+        <div class="sub ${j.status === 'failed' ? 'err' : ''}">${esc(j.message)}${timing(j)}</div>
         <div class="acts">
           ${['queued', 'failed', 'cancelled'].includes(j.status) ? `<button class="sec sm" onclick="edit(${j.id})">Edit</button>` : ''}
           ${live ? `<button class="sec sm" onclick="act(${j.id},'cancel')">Cancel</button>` : ''}
@@ -238,6 +247,8 @@ async function refresh() {
     }).join('') : 'No jobs yet.';
     const h = await api('/api/health');
     $('#status').textContent = h.tts ? 'TTS backend: connected' : 'TTS backend: NOT reachable (' + h.tts_url + ')';
+    const g = await api('/api/gpu').catch(() => null);
+    $('#gpu').textContent = g ? `GPU: ${g.name} · ${g.util}% load · ${(g.mem_used / 1024).toFixed(1)} / ${(g.mem_total / 1024).toFixed(1)} GB · ${g.temp}°C` : '';
   } catch (e) { $('#status').textContent = 'Server unreachable'; }
 }
 

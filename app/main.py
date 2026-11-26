@@ -49,6 +49,11 @@ def init_db() -> None:
             c.execute("ALTER TABLE jobs ADD COLUMN meta TEXT DEFAULT '{}'")
         except sqlite3.OperationalError:
             pass  # column already exists
+        for col in ("started REAL", "eta REAL"):
+            try:
+                c.execute(f"ALTER TABLE jobs ADD COLUMN {col}")
+            except sqlite3.OperationalError:
+                pass
         c.execute("UPDATE jobs SET status='queued' WHERE status='running'")  # resume after restart
         c.commit()
 
@@ -83,14 +88,20 @@ def worker_loop() -> None:
             time.sleep(1.5)
             continue
         jid = job["id"]
-        update(jid, status="running", message="Starting")
+        t0 = time.time()
+        update(jid, status="running", message="Starting", started=t0, eta=None)
         last_write = [0.0]
+        base = [None]  # chunks already cached at the start, so resumed jobs don't skew the estimate
 
         def on_progress(done: int, total: int, msg: str) -> None:
             now = time.time()
+            if base[0] is None:
+                base[0] = done
             if now - last_write[0] > 0.5 or done == total:
                 last_write[0] = now
-                update(jid, done=done, total=total, message=msg)
+                fresh = done - base[0]
+                eta = (now - t0) / fresh * (total - done) if fresh >= 3 and total > done else None
+                update(jid, done=done, total=total, message=msg, eta=eta)
 
         def on_meta(book) -> None:
             update(jid, title=book.title, author=book.author)
@@ -219,11 +230,36 @@ async def create_jobs(files: list[UploadFile] = File(...), voice: str = Form(...
     return {"created": made, "rejected": rejected}
 
 
+_gpu_cache: tuple[float, dict | None] = (0.0, None)
+
+
+@app.get("/api/gpu")
+def gpu():
+    """GPU load via nvidia-smi (needs the NVIDIA runtime enabled for this container; null if unavailable)."""
+    global _gpu_cache
+    if time.time() - _gpu_cache[0] < 1.0:
+        return _gpu_cache[1]
+    info = None
+    try:
+        out = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu",
+             "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=4)
+        if out.returncode == 0 and out.stdout.strip():
+            name, util, used, total, temp = [x.strip() for x in out.stdout.strip().splitlines()[0].split(",")]
+            info = {"name": name.replace("NVIDIA ", ""), "util": int(util), "mem_used": int(used),
+                    "mem_total": int(total), "temp": int(temp)}
+    except Exception:  # noqa: BLE001
+        info = None
+    _gpu_cache = (time.time(), info)
+    return info
+
+
 @app.get("/api/jobs")
 def list_jobs():
     with closing(db()) as c:
         rows = c.execute("SELECT * FROM jobs ORDER BY id DESC LIMIT 200").fetchall()
-    return [dict(r) for r in rows]
+    now = time.time()  # server clock, so elapsed time is right even if the browser's clock is off
+    return [{**dict(r), "now": now} for r in rows]
 
 
 @app.patch("/api/jobs/{jid}/meta")
