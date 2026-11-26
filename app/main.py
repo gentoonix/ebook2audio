@@ -19,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .epub_parser import parse_epub
-from .pipeline import TONES, tone_filter, SUPPORTED_EXTS, AlreadyExists, Cancelled, convert, safe, synth
+from .pipeline import TONES, tone_filter, normalize, load_pronunciations, apply_rules, SUPPORTED_EXTS, AlreadyExists, Cancelled, convert, safe, synth
 
 DB_PATH = config.DATA_DIR / "jobs.db"
 UPLOADS = config.DATA_DIR / "uploads"
@@ -155,6 +155,7 @@ def voices():
 @app.post("/api/preview")
 def preview(voice: str = Form(...), speed: float = Form(1.0), text: str = Form(""), tone: str = Form("natural")):
     text = text.strip()[:400] or "Chapter one. It was a bright cold day in April, and the clocks were striking thirteen."
+    text = apply_rules(normalize(text), load_pronunciations())  # same text processing as real conversions
     try:
         with httpx.Client(timeout=60) as c:
             pcm = synth(c, text, voice, speed)

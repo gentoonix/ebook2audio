@@ -125,6 +125,7 @@ def normalize_numbers(t: str) -> str:
     t = re.sub(r"\b(\d+(?:,\d{3})*)\s?[-–]\s?(\d+(?:,\d{3})*)\b", r"\1 to \2", t)
     # Years: four digits, no comma, 1100-2099, not part of a larger number
     t = re.sub(r"(?<![\d,.])(1[1-9]\d\d|20\d\d)(?![\d]|,\d|\.\d)", lambda m: _year(int(m.group(1))), t)
+    t = re.sub(r"\b(\d+(?:,\d{3})*)s\b", lambda m: _int(m.group(1)) + "s", t)   # 2500s
     # Everything else numeric
     t = re.sub(r"(?<![\w.])\d+(?:,\d{3})*(?:\.\d+)?(?![\w])|(?<![\w.])\.\d+", lambda m: _num(m.group(0).rstrip(",")), t)
     t = re.sub(r"\b(\d+)(?=[A-Za-z])", lambda m: _int(m.group(1)) + " ", t)  # 3D, 4x4
