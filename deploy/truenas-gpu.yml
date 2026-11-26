@@ -1,0 +1,41 @@
+# TrueNAS: Apps -> Discover Apps -> (three-dot menu) -> Install via YAML. App name: ebook2audio. Kokoro runs on the NVIDIA GPU.
+# Before pasting: Apps -> Configuration -> Settings -> tick "Install NVIDIA Drivers".
+services:
+  ebook2audio:
+    image: ghcr.io/YOUR_GITHUB_USER/ebook2audio:latest      # <-- 1. your GitHub user, lowercase
+    container_name: ebook2audio
+    restart: unless-stopped
+    pull_policy: always
+    user: "568:568"
+    depends_on:
+      - kokoro
+    ports:
+      - "30080:8000"
+    environment:
+      TTS_URL: "http://kokoro:8880"
+      TTS_CONCURRENCY: "3"
+      OUTPUT_PATTERN: "{author}/{series}/{title}"
+      UMASK: "002"
+      TZ: "America/New_York"
+      # ABS_URL: "http://ABS_SERVER_IP:13378"
+      # ABS_API_KEY: ""
+      # ABS_LIBRARY_ID: ""
+    volumes:
+      - /mnt/POOL/apps/ebook2audio/data:/data               # <-- 2.
+      - /mnt/POOL/apps/ebook2audio/config:/config
+      - /mnt/POOL/audiobooks:/output                        # <-- 3.
+
+  kokoro:
+    image: ghcr.io/remsky/kokoro-fastapi-gpu:latest         # RTX 50-series: use :latest-cu128
+    container_name: ebook2audio-kokoro
+    restart: unless-stopped
+    pull_policy: always
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1                                      # if the GPU isn't detected, replace count with: device_ids: ["GPU-<uuid from nvidia-smi -L>"]
+              capabilities: [gpu]

@@ -1,0 +1,56 @@
+# NVIDIA GPU:                       docker compose --profile gpu up -d
+#
+# The web UI listens on :8000. Point your Cloudflare Tunnel at http://<host>:8000
+# and protect it with Cloudflare Access (the app itself has no login).
+
+services:
+  app:
+    image: ${APP_IMAGE:-ghcr.io/YOUR_GITHUB_USER/ebook2audio:latest}   # built + weekly-refreshed by .github/workflows/build.yml
+    pull_policy: always
+    container_name: ebook2audio
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    user: "${PUID:-568}:${PGID:-568}"   # match the owner Audiobookshelf/Chaptarr use on the shared folder
+    environment:
+      TTS_URL: "http://kokoro:8880"
+      TTS_CONCURRENCY: "2"          # parallel TTS requests; 1 on weak CPUs, 2-4 on a GPU
+      OUTPUT_PATTERN: "{author}/{series}/{title}"   # see README for other layouts
+      UMASK: "002"
+      # Optional: tell Audiobookshelf to rescan after each book (Settings -> API Keys in ABS)
+      # ABS_URL: "http://audiobookshelf:13378"
+      # ABS_API_KEY: ""
+      # ABS_LIBRARY_ID: ""
+      BITRATE: "64k"
+      DEFAULT_VOICE: "af_heart"
+    volumes:
+      - ./data:/data                 # queue DB, uploads, resumable work files
+      - ./config:/config             # pronunciation.txt lives here
+      - ${OUTPUT_HOST_PATH:-./output}:/output   # <- the folder Audiobookshelf / FileBrowser sees
+
+  kokoro-cpu:
+    profiles: ["cpu"]
+    image: ghcr.io/remsky/kokoro-fastapi-cpu:latest
+    pull_policy: always
+    container_name: kokoro
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: ["kokoro"]
+
+  kokoro-gpu:
+    profiles: ["gpu"]
+    image: ghcr.io/remsky/kokoro-fastapi-gpu:latest   # use :latest-cu128 for RTX 50-series
+    pull_policy: always
+    container_name: kokoro
+    restart: unless-stopped
+    networks:
+      default:
+        aliases: ["kokoro"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

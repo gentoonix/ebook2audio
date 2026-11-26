@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ebook2audio</title>
+<style>
+  :root { --bg:#14161a; --card:#1d2026; --line:#2b3039; --fg:#e8eaed; --mut:#98a0ac; --acc:#5aa9ff; --ok:#4cc38a; --bad:#ff6b6b; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.45 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 20px 14px 60px; }
+  h1 { font-size: 20px; margin: 4px 0 16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:14px; }
+  #drop { border:2px dashed var(--line); border-radius:10px; padding:26px 10px; text-align:center; color:var(--mut); cursor:pointer; }
+  #drop.over { border-color:var(--acc); color:var(--fg); }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:end; margin-top:12px; }
+  label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--mut); flex:1; min-width:140px; }
+  select, input[type=text], input[type=number] { background:var(--bg); color:var(--fg); border:1px solid var(--line); border-radius:8px; padding:9px; font-size:15px; }
+  button { background:var(--acc); color:#04121f; border:0; border-radius:8px; padding:10px 16px; font-weight:600; font-size:15px; cursor:pointer; }
+  button.sec { background:transparent; color:var(--fg); border:1px solid var(--line); font-weight:500; }
+  button.sm { padding:5px 10px; font-size:13px; }
+  button:disabled { opacity:.5; cursor:default; }
+  #files { margin-top:10px; font-size:13px; color:var(--mut); }
+  .job { display:flex; flex-direction:column; gap:6px; padding:12px 0; border-top:1px solid var(--line); }
+  .job:first-child { border-top:0; }
+  .top { display:flex; justify-content:space-between; gap:10px; align-items:baseline; }
+  .name { font-weight:600; overflow-wrap:anywhere; }
+  .sub { color:var(--mut); font-size:12px; overflow-wrap:anywhere; }
+  .badge { font-size:11px; padding:2px 8px; border-radius:99px; border:1px solid var(--line); white-space:nowrap; }
+  .done .badge { color:var(--ok); border-color:var(--ok); } .failed .badge { color:var(--bad); border-color:var(--bad); }
+  .running .badge { color:var(--acc); border-color:var(--acc); }
+  .bar { height:6px; background:var(--bg); border-radius:4px; overflow:hidden; }
+  .bar > i { display:block; height:100%; background:var(--acc); transition:width .4s; }
+  .acts { display:flex; gap:6px; }
+  #msg { margin-top:10px; font-size:13px; } .err { color:var(--bad); }
+  #status { font-size:12px; color:var(--mut); margin-bottom:8px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>ebook → audiobook</h1>
+  <div id="status"></div>
+
+  <div class="card">
+    <div id="drop">Drop ebooks here (EPUB, MOBI, AZW3, PDF, FB2, DOCX, TXT…), or tap to choose (multiple allowed)</div>
+    <input id="picker" type="file" accept=".epub,.mobi,.azw,.azw3,.fb2,.pdf,.txt,.docx,.rtf,.html,.htm,.odt" multiple hidden>
+    <div id="files"></div>
+    <div class="row">
+      <label>Voice
+        <select id="voice"></select>
+      </label>
+      <label>Custom voice / blend (optional)
+        <input id="custom" type="text" placeholder="e.g. af_bella+af_sky">
+      </label>
+      <label style="max-width:110px">Speed
+        <input id="speed" type="number" min="0.5" max="2" step="0.05" value="1.0">
+      </label>
+    </div>
+    <details style="margin-top:12px">
+      <summary style="color:var(--mut);cursor:pointer;font-size:13px">Metadata for this upload (optional, applies to every book)</summary>
+      <div class="row">
+        <label>Series <input id="m_series" type="text" placeholder="only if the books lack it"></label>
+        <label>Author <input id="m_author" type="text" placeholder="overrides the file"></label>
+        <label>Narrator <input id="m_narrator" type="text" placeholder="default: Kokoro AI (voice)"></label>
+      </div>
+    </details>
+    <div class="row">
+      <button class="sec" id="prev">▶ Preview voice</button>
+      <button id="go" disabled>Add to queue</button>
+    </div>
+    <div id="msg"></div>
+  </div>
+
+  <div class="card"><div id="jobs">No jobs yet.</div></div>
+</main>
+
+<dialog id="dlg" style="background:var(--card);color:var(--fg);border:1px solid var(--line);border-radius:12px;max-width:420px;width:92%">
+  <form method="dialog" id="editform">
+    <div style="font-weight:600;margin-bottom:6px">Edit book details</div>
+    <div class="row" style="margin-top:0">
+      <label style="min-width:100%">Title <input id="e_title" type="text"></label>
+      <label style="min-width:100%">Author <input id="e_author" type="text"></label>
+      <label style="min-width:60%">Series <input id="e_series" type="text"></label>
+      <label style="min-width:30%;max-width:30%">Number <input id="e_index" type="text" placeholder="1"></label>
+      <label style="min-width:100%">Narrator <input id="e_narrator" type="text" placeholder="default: Kokoro AI (voice)"></label>
+    </div>
+    <div class="row"><button type="button" class="sec" id="e_cancel">Cancel</button><button type="submit" id="e_save">Save</button></div>
+  </form>
+</dialog>
+
+<script>
+const $ = s => document.querySelector(s);
+let picked = [];
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json().catch(() => ({}));
+}
+
+function setFiles(list) {
+  picked = [...list].filter(f => /\.(epub|mobi|azw3?|fb2|pdf|txt|docx|rtf|html?|odt)$/i.test(f.name));
+  $('#files').textContent = picked.length ? picked.map(f => f.name).join(' · ') : '';
+  $('#go').disabled = !picked.length;
+}
+
+const drop = $('#drop');
+drop.onclick = () => $('#picker').click();
+$('#picker').onchange = e => setFiles(e.target.files);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); };
+drop.ondragleave = () => drop.classList.remove('over');
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); setFiles(e.dataTransfer.files); };
+
+const chosenVoice = () => $('#custom').value.trim() || $('#voice').value;
+
+$('#prev').onclick = async () => {
+  const b = $('#prev'); b.disabled = true; $('#msg').textContent = 'Generating sample…'; $('#msg').className = '';
+  try {
+    const fd = new FormData(); fd.append('voice', chosenVoice()); fd.append('speed', $('#speed').value);
+    const r = await fetch('/api/preview', { method: 'POST', body: fd });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    new Audio(URL.createObjectURL(await r.blob())).play();
+    $('#msg').textContent = '';
+  } catch (e) { $('#msg').textContent = e.message; $('#msg').className = 'err'; }
+  b.disabled = false;
+};
+
+$('#go').onclick = async () => {
+  const b = $('#go'); b.disabled = true; $('#msg').className = ''; $('#msg').textContent = 'Uploading…';
+  try {
+    const fd = new FormData();
+    picked.forEach(f => fd.append('files', f));
+    fd.append('voice', chosenVoice()); fd.append('speed', $('#speed').value);
+    fd.append('series', $('#m_series').value); fd.append('author', $('#m_author').value); fd.append('narrator', $('#m_narrator').value);
+    const res = await api('/api/jobs', { method: 'POST', body: fd });
+    $('#msg').textContent = `Queued ${res.created.length} book(s).` + (res.rejected.length ? ' Skipped: ' + res.rejected.join('; ') : '');
+    setFiles([]); $('#picker').value = '';
+    refresh();
+  } catch (e) { $('#msg').textContent = e.message; $('#msg').className = 'err'; b.disabled = false; }
+};
+
+async function loadVoices() {
+  const v = await api('/api/voices');
+  $('#voice').innerHTML = v.voices.map(x => `<option ${x === v.default ? 'selected' : ''}>${x}</option>`).join('');
+}
+
+async function act(id, what) {
+  try {
+    if (what === 'remove') await api('/api/jobs/' + id, { method: 'DELETE' });
+    else await api(`/api/jobs/${id}/${what}`, { method: 'POST' });
+  } catch (e) { alert(e.message); }
+  refresh();
+}
+
+let editing = null, jobCache = {};
+function edit(id) {
+  const j = jobCache[id], m = JSON.parse(j.meta || '{}');
+  editing = id;
+  $('#e_title').value = m.title ?? j.title ?? ''; $('#e_author').value = m.author ?? j.author ?? '';
+  $('#e_series').value = m.series ?? ''; $('#e_index').value = m.series_index ?? ''; $('#e_narrator').value = m.narrator ?? '';
+  $('#dlg').showModal();
+}
+$('#e_cancel').onclick = () => $('#dlg').close();
+$('#editform').onsubmit = async e => {
+  e.preventDefault();
+  try {
+    await api(`/api/jobs/${editing}/meta`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: $('#e_title').value, author: $('#e_author').value, series: $('#e_series').value,
+                             series_index: $('#e_index').value, narrator: $('#e_narrator').value }) });
+    $('#dlg').close(); refresh();
+  } catch (err) { alert(err.message); }
+};
+
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function refresh() {
+  try {
+    const jobs = await api('/api/jobs');
+    jobCache = Object.fromEntries(jobs.map(j => [j.id, j]));
+    $('#jobs').innerHTML = jobs.length ? jobs.map(j => {
+      const pct = j.total ? Math.round(100 * j.done / j.total) : 0;
+      const title = j.title || j.filename;
+      const live = ['running', 'queued', 'uploading'].includes(j.status);
+      const m = JSON.parse(j.meta || '{}');
+      const series = m.series ? `${m.series}${m.series_index ? ' #' + m.series_index : ''} · ` : '';
+      return `<div class="job ${j.status}">
+        <div class="top"><span class="name">${esc(title)}</span><span class="badge">${j.status}${j.status === 'running' ? ' ' + pct + '%' : ''}</span></div>
+        <div class="sub">${esc(j.author)}${j.author ? ' · ' : ''}${esc(series)}${esc(j.voice)}${j.status === 'done' ? ' · ' + esc(j.output) : ''}</div>
+        ${j.status === 'running' ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ''}
+        <div class="sub ${j.status === 'failed' ? 'err' : ''}">${esc(j.message)}</div>
+        <div class="acts">
+          ${['queued', 'failed', 'cancelled'].includes(j.status) ? `<button class="sec sm" onclick="edit(${j.id})">Edit</button>` : ''}
+          ${live ? `<button class="sec sm" onclick="act(${j.id},'cancel')">Cancel</button>` : ''}
+          ${['failed', 'cancelled'].includes(j.status) ? `<button class="sec sm" onclick="act(${j.id},'retry')">Retry</button>` : ''}
+          ${j.status !== 'running' ? `<button class="sec sm" onclick="act(${j.id},'remove')">Remove</button>` : ''}
+        </div></div>`;
+    }).join('') : 'No jobs yet.';
+    const h = await api('/api/health');
+    $('#status').textContent = h.tts ? 'TTS backend: connected' : 'TTS backend: NOT reachable (' + h.tts_url + ')';
+  } catch (e) { $('#status').textContent = 'Server unreachable'; }
+}
+
+loadVoices(); refresh(); setInterval(refresh, 2500);
+</script>
+</body>
+</html>

@@ -1,0 +1,50 @@
+name: build-and-publish
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 5 * * 1"   # weekly rebuild: picks up new Calibre, ffmpeg, Python and dependency releases
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install ffmpeg and dependencies (latest versions, same as the image gets)
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+          pip install -r requirements.txt
+      - name: Smoke test (fake TTS, real app and ffmpeg)
+        run: python tests/smoke.py
+
+  publish:
+    needs: test            # a broken dependency update fails here and never reaches :latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Lowercase image name
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/ebook2audio" >> "$GITHUB_ENV"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          pull: true          # fetch the newest base image
+          no-cache: true      # re-run apt/pip so updates are actually picked up
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.run_number }}
