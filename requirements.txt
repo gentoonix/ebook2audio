@@ -5,3 +5,4 @@ httpx
 ebooklib
 beautifulsoup4
 lxml
+num2words

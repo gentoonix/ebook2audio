@@ -51,9 +51,12 @@ def main() -> None:
 
         epub2 = tmp / "book2.epub"
         make_epub.make(str(epub2), "Second Smoke", "Sam Ple", 1)
+        vj = httpx.get(f"{base}/api/voices").json()
+        assert vj["voices"] == ["af_bella", "am_adam", "zf_xiaoxiao"], vj
+        assert vj["grades"] == {"af_bella": "A-"}, vj
         with open(epub, "rb") as f1, open(epub2, "rb") as f2:
             r = httpx.post(f"{base}/api/jobs", files=[("files", ("book.epub", f1)), ("files", ("book2.epub", f2))],
-                           data={"voice": "af_bella", "series": "Smoke Saga", "narrator": "Test Voice"})
+                           data={"voice": "af_bella", "series": "Smoke Saga", "narrator": "Test Voice", "tone": "deep_gravel"})
         r.raise_for_status()
         ids = r.json()["created"]
         # edit the still-queued second job: series number + title, without touching the first

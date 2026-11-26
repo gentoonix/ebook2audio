@@ -18,7 +18,7 @@ def health():
 
 @app.get("/v1/audio/voices")
 def voices():
-    return {"voices": ["af_bella", "af_sky", "am_adam"]}
+    return {"voices": [{"id": "af_bella", "name": "af_bella", "overall_grade": "A-"}, {"id": "am_adam", "name": "am_adam"}, {"id": "zf_xiaoxiao", "name": "zf_xiaoxiao"}]}
 
 
 @app.post("/v1/audio/speech")

@@ -16,6 +16,7 @@ OUTPUT_DIR = Path(os.getenv("OUTPUT_DIR", "/output"))
 CONFIG_DIR = Path(os.getenv("CONFIG_DIR", "/config"))
 
 MAX_CHARS = int(os.getenv("MAX_CHARS", "350"))
+MIN_CHUNK_CHARS = int(os.getenv("MIN_CHUNK_CHARS", "60"))  # shorter fragments are merged into a neighbour
 BITRATE = os.getenv("BITRATE", "64k")
 ANNOUNCE_CHAPTERS = _b("ANNOUNCE_CHAPTERS", "1")
 SENTENCE_PAUSE_MS = int(os.getenv("SENTENCE_PAUSE_MS", "150"))

@@ -12,6 +12,7 @@ from typing import Callable
 import httpx
 
 from . import config
+from .textnorm import speakable
 from .epub_parser import Book, parse_epub
 
 ABBREV = {"mr", "mrs", "ms", "dr", "st", "jr", "sr", "prof", "vs", "etc", "no", "mt", "col", "gen", "capt", "lt", "sgt"}
@@ -49,6 +50,36 @@ def apply_rules(text: str, rules) -> str:
     for pat, dst in rules:
         text = pat.sub(dst, text)
     return text
+
+
+_TRANS = str.maketrans({"\u2018": "'", "\u2019": "'", "\u201a": "'", "\u201c": '"', "\u201d": '"',
+                        "\u00a0": " ", "\u2026": "...", "\u2013": "-", "\u2022": "-", "\u200b": "", "\ufeff": ""})
+
+
+def normalize(text: str) -> str:
+    """Typographic characters from EPUBs (curly quotes, em dashes, nbsp) -> plain ASCII the TTS handles well."""
+    text = text.translate(_TRANS)
+    text = re.sub(r"\s*[\u2014\u2015]\s*", ", ", text)
+    return speakable(re.sub(r"\s+", " ", text).strip())
+
+
+def merge_short(chunks: list[tuple[str, int]], minlen: int) -> list[tuple[str, int]]:
+    """Very short inputs (e.g. a lone "Chapter 3.") are a weak spot for small TTS models: join them to a neighbour."""
+    out: list[tuple[str, int]] = []
+    carry, carry_pause = "", 0
+    for text, pause in chunks:
+        if carry:
+            text, carry = f"{carry} {text}", ""
+        if len(text) < minlen:
+            carry, carry_pause = text, pause
+            continue
+        out.append((text, pause))
+    if carry:
+        if out:
+            out[-1] = (f"{out[-1][0]} {carry}", carry_pause)
+        else:
+            out.append((carry, carry_pause))
+    return out
 
 
 def split_sentences(par: str) -> list[str]:
@@ -105,7 +136,7 @@ def chunk_paragraphs(paragraphs: list[str], max_chars: int) -> list[tuple[str, i
         for i, t in enumerate(local):
             last = i == len(local) - 1
             chunks.append((t, config.PARAGRAPH_PAUSE_MS if last else config.SENTENCE_PAUSE_MS))
-    return chunks
+    return merge_short(chunks, config.MIN_CHUNK_CHARS)
 
 
 # ---------- TTS ----------
@@ -126,6 +157,11 @@ def synth(client: httpx.Client, text: str, voice: str, speed: float) -> bytes:
             if len(r.content) < 200:
                 raise RuntimeError("TTS returned (almost) no audio")
             return r.content
+        except httpx.HTTPStatusError as e:
+            if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
+                raise RuntimeError(f"TTS rejected the request ({e.response.status_code}): {e.response.text[:200]}") from e
+            last = e
+            time.sleep(1.5 * (attempt + 1))
         except Exception as e:  # noqa: BLE001
             last = e
             time.sleep(1.5 * (attempt + 1))
@@ -233,7 +269,7 @@ def convert(
         paras = list(ch.paragraphs)
         if config.ANNOUNCE_CHAPTERS:
             paras.insert(0, ch.title if re.search(r"[.!?]$", ch.title) else ch.title + ".")
-        paras = [apply_rules(p, rules) for p in paras]
+        paras = [apply_rules(normalize(p), rules) for p in paras]
         plans.append(chunk_paragraphs(paras, config.MAX_CHARS))
 
     total = sum(len(p) for p in plans)
@@ -285,10 +321,23 @@ def convert(
             for f in cdir.glob("0*.pcm"):
                 f.unlink()
 
-    return assemble(book, work)
+    return assemble(book, work, (overrides or {}).get("tone", "natural"))
 
 
-def assemble(book: Book, work: Path) -> Path:
+TONES = {
+    "natural": "",
+    "deeper": "rubberband=pitch=0.93,bass=g=3:f=120",
+    "deep_warm": "rubberband=pitch=0.89,bass=g=5:f=110,equalizer=f=3000:t=q:w=1.2:g=-2,acompressor=threshold=-18dB:ratio=3",
+    "deep_gravel": ("rubberband=pitch=0.88,bass=g=5:f=110,aexciter=amount=2.5:drive=8:freq=2800,"
+                    "equalizer=f=3000:t=q:w=1.2:g=-2,acompressor=threshold=-18dB:ratio=3"),
+}
+
+
+def tone_filter(tone: str) -> str:
+    return TONES.get(tone or "natural", "")
+
+
+def assemble(book: Book, work: Path, tone: str = "natural") -> Path:
     bytes_per_ms = config.SAMPLE_RATE * 2 / 1000
     pcms = [work / f"c{i:03d}" / "chapter.pcm" for i in range(len(book.chapters))]
 
@@ -322,6 +371,8 @@ def assemble(book: Book, work: Path) -> Path:
     if cover_file:
         cmd += ["-i", str(cover_file)]
     cmd += ["-map", "0:a"]
+    if tone_filter(tone):
+        cmd += ["-af", tone_filter(tone)]
     if cover_file:
         cmd += ["-map", "2:v", "-c:v", "copy", "-disposition:v:0", "attached_pic"]
     cmd += ["-map_metadata", "1", "-map_chapters", "1",

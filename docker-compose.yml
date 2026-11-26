@@ -5,7 +5,7 @@
 
 services:
   app:
-    image: ${APP_IMAGE:-ghcr.io/gentoonix/ebook2audio:latest}   # built + weekly-refreshed by .github/workflows/build.yml
+    image: ${APP_IMAGE:-ghcr.io/YOUR_GITHUB_USER/ebook2audio:latest}   # built + weekly-refreshed by .github/workflows/build.yml
     pull_policy: always
     container_name: ebook2audio
     restart: unless-stopped
@@ -24,9 +24,9 @@ services:
       BITRATE: "64k"
       DEFAULT_VOICE: "af_heart"
     volumes:
-      - /mnt/PlexStor/Storage/e2aData:/data
-      - "/mnt/App NVMe/Configs/ebook2audio:/config"
-      - /mnt/FastStor/FileBrowser/Users/srice:/output
+      - ./data:/data                 # queue DB, uploads, resumable work files
+      - ./config:/config             # pronunciation.txt lives here
+      - ${OUTPUT_HOST_PATH:-./output}:/output   # <- the folder Audiobookshelf / FileBrowser sees
 
   kokoro-cpu:
     profiles: ["cpu"]

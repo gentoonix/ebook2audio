@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import subprocess
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import config
 from .epub_parser import parse_epub
-from .pipeline import SUPPORTED_EXTS, AlreadyExists, Cancelled, convert, safe, synth
+from .pipeline import TONES, tone_filter, SUPPORTED_EXTS, AlreadyExists, Cancelled, convert, safe, synth
 
 DB_PATH = config.DATA_DIR / "jobs.db"
 UPLOADS = config.DATA_DIR / "uploads"
@@ -139,23 +140,33 @@ def voices():
         r = httpx.get(f"{config.TTS_URL}/v1/audio/voices", timeout=8)
         r.raise_for_status()
         data = r.json()
-        v = data.get("voices", data) if isinstance(data, dict) else data
-        v = sorted(str(x) for x in v)
+        raw = data.get("voices", data) if isinstance(data, dict) else data
+        v = sorted({(x.get("id") or x.get("name")) if isinstance(x, dict) else str(x) for x in raw} - {None})
+        grades = {(x.get("id") or x.get("name")): x["overall_grade"] for x in raw
+                  if isinstance(x, dict) and x.get("overall_grade")}
         if v:
-            return {"voices": v, "default": config.DEFAULT_VOICE if config.DEFAULT_VOICE in v else v[0]}
+            return {"voices": v, "grades": grades,
+                    "default": config.DEFAULT_VOICE if config.DEFAULT_VOICE in v else v[0]}
     except Exception:  # noqa: BLE001
         pass
     return {"voices": FALLBACK_VOICES, "default": config.DEFAULT_VOICE, "fallback": True}
 
 
 @app.post("/api/preview")
-def preview(voice: str = Form(...), speed: float = Form(1.0)):
-    text = "It was a bright cold day in April, and the clocks were striking thirteen."
+def preview(voice: str = Form(...), speed: float = Form(1.0), text: str = Form(""), tone: str = Form("natural")):
+    text = text.strip()[:400] or "Chapter one. It was a bright cold day in April, and the clocks were striking thirteen."
     try:
         with httpx.Client(timeout=60) as c:
             pcm = synth(c, text, voice, speed)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(502, f"TTS unavailable: {e}") from e
+    if tone_filter(tone):
+        r = subprocess.run(["ffmpeg", "-loglevel", "error", "-f", "s16le", "-ar", str(config.SAMPLE_RATE), "-ac", "1",
+                            "-i", "pipe:0", "-af", tone_filter(tone), "-f", "wav", "pipe:1"],
+                           input=pcm, capture_output=True)
+        if r.returncode != 0:
+            raise HTTPException(500, f"Tone filter failed: {r.stderr.decode(errors='replace')[-200:]}")
+        return Response(r.stdout, media_type="audio/wav")
     buf = io.BytesIO()
     with wave.open(buf, "wb") as w:
         w.setnchannels(1)
@@ -167,7 +178,8 @@ def preview(voice: str = Form(...), speed: float = Form(1.0)):
 
 @app.post("/api/jobs")
 async def create_jobs(files: list[UploadFile] = File(...), voice: str = Form(...), speed: float = Form(1.0),
-                      author: str = Form(""), series: str = Form(""), narrator: str = Form("")):
+                      author: str = Form(""), series: str = Form(""), narrator: str = Form(""),
+                      tone: str = Form("natural")):
     voice = voice.strip()
     if not voice:
         raise HTTPException(400, "Choose a voice")
@@ -199,6 +211,7 @@ async def create_jobs(files: list[UploadFile] = File(...), voice: str = Form(...
         for k, v in (("author", author), ("series", series), ("narrator", narrator)):
             if v.strip():
                 meta[k] = v.strip()
+        meta["tone"] = tone if tone in TONES else "natural"
         update(jid, status="queued", meta=json.dumps(meta), **({"title": meta["title"], "author": meta["author"]}
                                                               if meta.get("title") else {}))
         made.append(jid)
